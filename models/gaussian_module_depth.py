@@ -18,7 +18,7 @@ from utils.data_utils import TrainResults, add_result
 import numpy as np
 import uuid
 from pathlib import Path
-from utils.image_utils import depth2image, confidence2image
+from utils.image_utils import depth2image, confidence2image, normal2image
 
 
 class GaussianModule(L.LightningModule):
@@ -128,11 +128,21 @@ class GaussianModule(L.LightningModule):
 
 
         rendered_depth = render_pkg.get("render_depth", None)
-        if rendered_depth is not None and self.global_step < self.config.train.densify_until_iteration:
+        rendered_normal = render_pkg.get("render_normal", None)
+
+        if rendered_depth is not None and self.global_step < 5000:
             rendered_depth = rendered_depth.unsqueeze(0)
+            rendered_normal = rendered_normal.unsqueeze(0)
             l_depth = self.depth_loss(camera, rendered_depth)
             # loss += l_depth
             self.log(f"{self.dataset.name}_depth_loss", l_depth)
+
+
+            l_normal = self.normal_loss(camera, rendered_normal)
+
+            self.log(f"{self.dataset.name}_normal_loss", l_normal)
+
+            loss += l_depth + l_normal
 
 
         if self.global_step % 500 == 0:
@@ -158,11 +168,38 @@ class GaussianModule(L.LightningModule):
         rendered_depth = rendered_depth[depth_mask]
         depth_map = camera.depth_map[depth_mask]
 
-        l_depth = torch.abs(rendered_depth - depth_map).mean() * 0.1
+        l_depth = torch.abs(rendered_depth - depth_map).mean() * 0.02
 
         if l_depth.item() > 0.5:
             l_depth *= 0.0
         return l_depth
+
+    def normal_loss(self, camera: Camera, rendered_normal: Tensor) -> Tensor:
+
+        confidence = (camera.normal_confidence - camera.normal_confidence.min()) / (camera.normal_confidence.max() - camera.normal_confidence.min())
+
+        # visible_mask = confidence.cpu().numpy()
+        #
+        # visible_mask[visible_mask < 0.7] = 0.0
+        #
+        # Image.fromarray((visible_mask * 255).astype(np.uint8)).show()
+        #
+        normal_mask = confidence > 0.8
+
+        rendered_normal = rendered_normal.squeeze()
+        normal_map = camera.normal_map.squeeze()
+        if self.global_step % 200 == 0:
+            self.log_image(normal2image(rendered_normal.squeeze()), normal2image(camera.normal_map.squeeze()), name="Normal Comparison")
+
+        rendered_normal = rendered_normal[:, normal_mask]
+        normal_map = normal_map[:, normal_mask]
+
+        l_normal = 0.03 * (1.0 - torch.nn.functional.cosine_similarity(rendered_normal, normal_map, dim=1)).mean()
+
+        return l_normal
+
+
+
 
 
     def configure_optimizers(self):

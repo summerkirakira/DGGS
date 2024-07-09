@@ -31,3 +31,7 @@ def confidence2image(confidence_map):
     confidence_map = confidence_map.repeat(3, 1, 1)
     confidence_map = (confidence_map - torch.min(confidence_map)) / (torch.max(confidence_map) - torch.min(confidence_map)) * 255
     return confidence_map
+
+def normal2image(normal_map):
+    normal_map = (normal_map + 1) / 2
+    return normal_map
