@@ -6,7 +6,7 @@ defaults:
 #      - madoka
 
 project: depth-guide-gs-v2
-name: Depth + Normal [360 Garden][5000, 0.02, 0.03]
+name: Depth + Normal [360 Garden][10000, 0.02, 0.03]
 
 ip: 127.0.0.1
 port: 6009

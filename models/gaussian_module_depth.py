@@ -130,7 +130,7 @@ class GaussianModule(L.LightningModule):
         rendered_depth = render_pkg.get("render_depth", None)
         rendered_normal = render_pkg.get("render_normal", None)
 
-        if rendered_depth is not None and self.global_step < 5000:
+        if rendered_depth is not None and self.global_step < 10000:
             rendered_depth = rendered_depth.unsqueeze(0)
             rendered_normal = rendered_normal.unsqueeze(0)
             l_depth = self.depth_loss(camera, rendered_depth)
