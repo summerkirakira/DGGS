@@ -54,7 +54,7 @@ def upload_results(logger: WandbLogger):
 
         average = {"ll1": 0, "lssim": 0, "psnr": 0, "mse": 0, "lpips": 0}
         for index, result in enumerate(results):
-            # image = Image.open(result.image)
+            # images = Image.open(result.images)
             table.add_data(f"Index: {index} / name: {result.name}", result.ll1, result.lssim, result.psnr, result.mse, result.lpips)
             average["ll1"] += result.ll1
             average["lssim"] += result.lssim

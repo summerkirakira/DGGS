@@ -44,14 +44,14 @@ class GaussianModule(L.LightningModule):
         if not self.cache_path.exists():
             self.cache_path.mkdir()
 
-    def log_image(self, image: Tensor, gt_image: Tensor, name: str = "image"):
+    def log_image(self, image: Tensor, gt_image: Tensor, name: str = "images"):
         concatenated_img = torch.cat([image, gt_image], dim=2)
         wandb.log({name: [wandb.Image(concatenated_img)]})
 
     def on_train_epoch_start(self) -> None:
         self.connect_gui()
 
-    def save_cache_image(self, image: Tensor, gt_image: Tensor, name="image") -> pathlib.Path:
+    def save_cache_image(self, image: Tensor, gt_image: Tensor, name="images") -> pathlib.Path:
         concatenated_img = torch.cat([image, gt_image], dim=2)
         concatenated_img = concatenated_img.cpu().numpy() * 255
         concatenated_img = np.transpose(concatenated_img, (1, 2, 0))
@@ -172,7 +172,7 @@ class GaussianModule(L.LightningModule):
                 network_gui.conn = None
 
     def densify(self, viewspace_point_tensor, visibility_filter, radii):
-        # Keep track of max radii in image-space for pruning
+        # Keep track of max radii in images-space for pruning
         self.gaussians.max_radii2D[visibility_filter] = torch.max(self.gaussians.max_radii2D[visibility_filter],
                                                                   radii[visibility_filter])
         self.gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
