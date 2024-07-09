@@ -9,6 +9,7 @@ from datetime import datetime
 from utils.data_utils import upload_results
 from omegaconf import DictConfig, OmegaConf
 from gaussian_renderer import render, network_gui
+from utils.depth_util import remove_depth_model, init_depth_model
 
 
 def modify_config(cfg):
@@ -34,6 +35,9 @@ def main(cfg):
     network_gui.init(cfg.ip, cfg.port)
 
     for dataset in cfg.dataset:
+
+        init_depth_model()
+
         model_path = Path(dataset.model_path)
         if not model_path.exists():
             model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,8 +56,12 @@ def main(cfg):
             logger=logger,
             enable_checkpointing=True
         )
+
+        remove_depth_model()
+
         trainer.fit(model, train_dataset)
         trainer.test(model, test_dataset)
+
 
     upload_results(logger)
 

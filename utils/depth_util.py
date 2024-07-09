@@ -4,8 +4,8 @@ from torch import Tensor
 from PIL import Image
 import numpy as np
 
-model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_giant2', pretrain=True)
-model = model.cuda()
+
+model = None
 
 
 def estimate_depth(image: Tensor, pcd, R, T, focal_x, focal_y) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
@@ -69,9 +69,16 @@ def estimate_depth(image: Tensor, pcd, R, T, focal_x, focal_y) -> Tuple[Tensor, 
     return refined_depth, confidence, normal, normal_confidence, depth_weight
 
 
-def remove_model():
+def init_depth_model():
+    global model
+    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_giant2', pretrain=True)
+    model = model.cuda()
+
+
+def remove_depth_model():
     global model
     model = None
+    torch.cuda.empty_cache()
 
 
 def optimize_depth(source, target, mask, depth_weight, prune_ratio=0.001):
