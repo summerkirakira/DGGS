@@ -84,6 +84,8 @@ class GaussianModule(L.LightningModule):
         result = TrainResults.Result(name=camera.image_name, ll1=Ll1.item(), lssim=Lssim.item(), psnr=test_psnr.item(), mse=test_mse.item(), lpips=test_lpips.item(), image=str(image_path))
         add_result(self.dataset.name, result)
 
+        self.log_image(image, gt_image, name=f"{self.dataset.name} Test Render Image")
+
         self.test_outputs.append({"test_ll1": Ll1, "test_lssim": Lssim, "test_psnr": test_psnr, "test_mse": test_mse, "test_lpips": test_lpips})
 
     def on_test_epoch_end(self):
