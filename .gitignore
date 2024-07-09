@@ -169,3 +169,4 @@ lightning_logs/
 wandb/
 gaussian_enhanced/
 cache/
+depth-guide-gs-v2/

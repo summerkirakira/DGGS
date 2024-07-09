@@ -10,18 +10,21 @@
 #
 
 import torch
+import torch.nn.functional as F
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
+from utils.general_utils import build_rotation
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
+
+def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor,
+           scaling_modifier=1.0, override_color=None, return_depth=True, return_normal=True):
     """
-    Render the scene. 
-    
-    Background tensor (bg_color) must be on GPU!
+    Render the scene.
+
+    Background tensor (bg_colo:wq:r) must be on GPU!
     """
- 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
     screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
     try:
@@ -71,9 +74,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     colors_precomp = None
     if override_color is None:
         if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
+            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree + 1) ** 2)
             dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+            dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
@@ -81,20 +84,65 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
 
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+    # Rasterize visible Gaussians to image, obtain their radii (on screen).
     rendered_image, radii = rasterizer(
-        means3D = means3D,
-        means2D = means2D,
-        shs = shs,
-        colors_precomp = colors_precomp,
-        opacities = opacity,
-        scales = scales,
-        rotations = rotations,
-        cov3D_precomp = cov3D_precomp)
+        means3D=means3D,
+        means2D=means2D,
+        shs=shs,
+        colors_precomp=colors_precomp,
+        opacities=opacity,
+        scales=scales,
+        rotations=rotations,
+        cov3D_precomp=cov3D_precomp)
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
-            "radii": radii}
+    return_dict = {"render": rendered_image,
+                   "viewspace_points": screenspace_points,
+                   "visibility_filter": radii > 0,
+                   "radii": radii}
+
+    if return_depth:
+        projvect1 = viewpoint_camera.world_view_transform[:, 2][:3].detach()
+        projvect2 = viewpoint_camera.world_view_transform[:, 2][-1].detach()
+        means3D_depth = (means3D * projvect1.unsqueeze(0)).sum(dim=-1, keepdim=True) + projvect2
+        means3D_depth = means3D_depth.repeat(1, 3)
+        render_depth, _ = rasterizer(
+            means3D=means3D,
+            means2D=means2D,
+            shs=None,
+            colors_precomp=means3D_depth,
+            opacities=opacity,
+            scales=scales,
+            rotations=rotations,
+            cov3D_precomp=cov3D_precomp)
+        render_depth = render_depth.mean(dim=0)
+        return_dict.update({'render_depth': render_depth})
+
+    if return_normal:
+        rotations_mat = build_rotation(rotations)
+        scales = pc.get_scaling
+        min_scales = torch.argmin(scales, dim=1)
+        indices = torch.arange(min_scales.shape[0])
+        normal = rotations_mat[indices, :, min_scales]
+
+        # convert normal direction to the camera; calculate the normal in the camera coordinate
+        view_dir = means3D - viewpoint_camera.camera_center
+        normal = normal * ((((view_dir * normal).sum(dim=-1) < 0) * 1 - 0.5) * 2)[..., None]
+
+        R_w2c = torch.tensor(viewpoint_camera.R.T).cuda().to(torch.float32)
+        normal = (R_w2c @ normal.transpose(0, 1)).transpose(0, 1)
+
+        render_normal, _ = rasterizer(
+            means3D=means3D,
+            means2D=means2D,
+            shs=None,
+            colors_precomp=normal,
+            opacities=opacity,
+            scales=scales,
+            rotations=rotations,
+            cov3D_precomp=cov3D_precomp)
+        render_normal = F.normalize(render_normal, dim=0)
+        return_dict.update({'render_normal': render_normal})
+
+    return return_dict

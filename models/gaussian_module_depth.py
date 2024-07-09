@@ -18,6 +18,7 @@ from utils.data_utils import TrainResults, add_result
 import numpy as np
 import uuid
 from pathlib import Path
+from utils.image_utils import depth2image, confidence2image
 
 
 class GaussianModule(L.LightningModule):
@@ -30,7 +31,7 @@ class GaussianModule(L.LightningModule):
 
         self.config = config
         self.gaussians = GaussianModel(dataset.sh_degree)
-        self.scene = Scene(dataset, self.gaussians)
+        self.scene = Scene(dataset, self.gaussians, shuffle=False)
         self.background = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         self.background = torch.tensor(self.background, dtype=torch.float32, device=dataset.data_device)
         self.dataset = dataset
@@ -43,6 +44,7 @@ class GaussianModule(L.LightningModule):
         self.cache_path = pathlib.Path("cache")
         if not self.cache_path.exists():
             self.cache_path.mkdir()
+
 
     def log_image(self, image: Tensor, gt_image: Tensor, name: str = "image"):
         concatenated_img = torch.cat([image, gt_image], dim=2)
@@ -122,9 +124,45 @@ class GaussianModule(L.LightningModule):
         loss = (1.0 - self.config.train.lambda_dssim) * Ll1 + self.config.train.lambda_dssim * (1.0 - Lssim)
         self.log(f"{self.dataset.name}_total_loss", loss)
 
+
+        rendered_depth = render_pkg.get("render_depth", None)
+        if rendered_depth is not None and self.global_step < self.config.train.densify_until_iteration:
+            rendered_depth = rendered_depth.unsqueeze(0)
+            l_depth = self.depth_loss(camera, rendered_depth)
+            loss += l_depth
+            self.log(f"{self.dataset.name}_depth_loss", l_depth)
+
+
         if self.global_step % 500 == 0:
             self.log_image(image, gt_image, name=f"Rendered Image[{self.dataset.name}]")
         return loss
+
+    def get_top_mask(self, tensor: Tensor, percentage: float = 0.8):
+        sorted_tensor, _ = torch.sort(tensor, descending=True)
+        threshold = sorted_tensor[int(percentage * len(tensor))]
+        return tensor > threshold
+
+    def depth_loss(self, camera: Camera, rendered_depth: Tensor):
+        depth_mask = camera.confidence_map > 0.95
+
+
+        if self.global_step % 200 == 0:
+            self.log_image(depth2image(rendered_depth), depth2image(camera.depth_map), name="Depth Comparison")
+
+            new_confidence = camera.confidence_map.clone()
+            new_confidence[depth_mask] = 0.0
+
+            self.log_image(confidence2image(new_confidence), confidence2image(camera.normal_confidence), name="Depth Confidence vs Normal Confidence")
+
+        rendered_depth = rendered_depth[depth_mask]
+        depth_map = camera.depth_map[depth_mask]
+
+        l_depth = torch.abs(rendered_depth - depth_map).mean() * 0.1
+
+        if l_depth.item() > 0.5:
+            l_depth *= 0.0
+        return l_depth
+
 
     def configure_optimizers(self):
         optimizer = self.gaussians.training_setup(self.config.train)

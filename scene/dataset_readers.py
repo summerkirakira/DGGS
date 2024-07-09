@@ -22,18 +22,80 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+from PIL import Image
+from utils.depth_util import estimate_depth
+import torch
+import pickle
+from pathlib import Path
 
-class CameraInfo(NamedTuple):
-    uid: int
-    R: np.array
-    T: np.array
-    FovY: np.array
-    FovX: np.array
-    image: np.array
-    image_path: str
-    image_name: str
-    width: int
-    height: int
+
+class CameraInfo:
+    def __init__(self, uid: int, R: np.array, T: np.array, FovY: np.array, FovX: np.array,
+                 image: Image, image_path: str, image_name: str, width: int, height: int, pcd=None):
+        self.uid = uid
+        self.R = R
+        self.T = T
+        self.FovY = FovY
+        self.FovX = FovX
+        self.image = image
+        self.image_path = image_path
+        self.image_name = image_name
+        self.width = width
+        self.height = height
+
+        image_torch = torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0).permute(0, 3, 1, 2)
+        if image_torch.shape[1] == 4:
+            image_torch = image_torch[:, :3, :, :]
+
+
+        self.cache_path = self.get_cache_path()
+
+        if self.cache_path.exists():
+            with self.cache_path.open('rb') as f:
+                cache = pickle.load(f)
+                self.load_from_cache(cache)
+                return
+
+        self.depth_map, self.confidence_map, self.normal_map, self.normal_confidence, self.depth_weight = estimate_depth(image_torch,
+                                                                                                      pcd,
+                                                                                                      R=R,
+                                                                                                      T=T,
+                                                                                                      focal_x=fov2focal(FovX, width),
+                                                                                                      focal_y=fov2focal(FovY, height)
+                                                                                                      )
+
+        self.depth_map = self.depth_map[0]
+        self.confidence_map = self.confidence_map[0]
+        self.normal_map = self.normal_map[0]
+        self.normal_confidence = self.normal_confidence[0]
+        self.save_to_cache()
+
+    def get_cache_path(self):
+
+        path = Path(self.image_path)
+
+        stem = path.stem
+
+        return path.parent / (stem + ".pkl")
+
+    def save_to_cache(self):
+        cache = {}
+        cache["depth_map"] = self.depth_map.cpu().numpy()
+        cache["confidence_map"] = self.confidence_map.cpu().numpy()
+        cache["normal_map"] = self.normal_map.cpu().numpy()
+        cache["normal_confidence"] = self.normal_confidence.cpu().numpy()
+        cache["depth_weight"] = self.depth_weight.cpu().numpy()
+
+        with self.cache_path.open('wb') as f:
+            pickle.dump(cache, f)
+
+    def load_from_cache(self, cache):
+        self.depth_map = torch.from_numpy(cache["depth_map"]).cuda()
+        self.confidence_map = torch.from_numpy(cache["confidence_map"]).cuda()
+        self.normal_map = torch.from_numpy(cache["normal_map"]).cuda()
+        self.normal_confidence = torch.from_numpy(cache["normal_confidence"]).cuda()
+        self.depth_weight = torch.from_numpy(cache["depth_weight"]).cuda()
+
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -41,6 +103,25 @@ class SceneInfo(NamedTuple):
     test_cameras: list
     nerf_normalization: dict
     ply_path: str
+
+
+def refineColmap(path):
+    cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
+    cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
+    points3D_file = os.path.join(path, "sparse/0", "points3D.bin")
+
+    cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
+    cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+    xyz_dict, rgb_dict, err_dict = read_points3D_binary(points3D_file)
+
+    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    storePly(ply_path, xyz_dict, rgb_dict, err_dict)
+
+    torch.cuda.empty_cache()
+
+    return ply_path, cam_extrinsics, cam_intrinsics
+
+
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -65,7 +146,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, pcd=None):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -99,7 +180,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+                              image_path=image_path, image_name=image_name, width=width, height=height, pcd=pcd)
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -110,18 +191,25 @@ def fetchPly(path):
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    return BasicPointCloud(points=positions, colors=colors, normals=normals)
+    errors = vertices['xyzerr'] / (vertices['xyzerr'].min() + 1e-8)
 
-def storePly(path, xyz, rgb):
+    return BasicPointCloud(points=positions, colors=colors, normals=normals, errors=errors)
+
+def storePly(path, xyz, rgb, xyzerr=None):
     # Define the dtype for the structured array
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-    
+             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
+             ('xyzerr', 'f4')]
+
     normals = np.zeros_like(xyz)
+    # xyzerr_mean = np.mean(xyzerr)
+    # xyzerr = 2 * np.exp(- ((xyzerr / xyzerr_mean)**2))
+    if xyzerr is None:
+        xyzerr = np.ones((xyz.shape[0], 1))
 
     elements = np.empty(xyz.shape[0], dtype=dtype)
-    attributes = np.concatenate((xyz, normals, rgb), axis=1)
+    attributes = np.concatenate((xyz, normals, rgb, xyzerr), axis=1)
     elements[:] = list(map(tuple, attributes))
 
     # Create the PlyData object and write to file
@@ -130,6 +218,22 @@ def storePly(path, xyz, rgb):
     ply_data.write(path)
 
 def readColmapSceneInfo(path, images, eval, llffhold=8):
+    ply_path = os.path.join(path, "sparse/0/points3D.ply")
+    bin_path = os.path.join(path, "sparse/0/points3D.bin")
+    txt_path = os.path.join(path, "sparse/0/points3D.txt")
+    if not os.path.exists(ply_path):
+        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        try:
+            xyz, rgb, _ = read_points3D_binary(bin_path)
+        except:
+            xyz, rgb, _ = read_points3D_text(txt_path)
+        # storePly(ply_path, xyz, rgb)
+        refineColmap(path)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -142,7 +246,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), pcd=pcd)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:
@@ -154,20 +258,6 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    ply_path = os.path.join(path, "sparse/0/points3D.ply")
-    bin_path = os.path.join(path, "sparse/0/points3D.bin")
-    txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    if not os.path.exists(ply_path):
-        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
-        try:
-            xyz, rgb, _ = read_points3D_binary(bin_path)
-        except:
-            xyz, rgb, _ = read_points3D_text(txt_path)
-        storePly(ply_path, xyz, rgb)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
 
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,

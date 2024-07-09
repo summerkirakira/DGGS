@@ -2,11 +2,11 @@ defaults:
   - train: default
   - pipe: default
   - dataset:
-      - ship
-      - drums
+      - 360_garden
+      - madoka
 
-project: gaussian_enhanced
-name: Test[drums]
+project: depth-guide-gs-v2
+name: Baseline[Madoka Garden]
 
 ip: 127.0.0.1
 port: 6009
