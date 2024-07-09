@@ -10,6 +10,7 @@ from utils.data_utils import upload_results
 from omegaconf import DictConfig, OmegaConf
 from gaussian_renderer import render, network_gui
 from utils.depth_util import remove_depth_model, init_depth_model
+import torch
 
 
 def modify_config(cfg):
@@ -35,6 +36,8 @@ def main(cfg):
     network_gui.init(cfg.ip, cfg.port)
 
     for dataset in cfg.dataset:
+
+        torch.cuda.empty_cache()
 
         init_depth_model()
 
