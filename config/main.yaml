@@ -2,8 +2,8 @@ defaults:
   - train: default
   - pipe: default
   - dataset:
-#      - 360_garden
-      - madoka
+      - 360_garden
+#      - madoka
 
 project: depth-guide-gs-v2
 name: Baseline Test[Madoka]

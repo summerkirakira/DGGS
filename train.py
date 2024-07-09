@@ -1,6 +1,6 @@
 import hydra
 from config import BasicConfig
-from models.gaussian_module import GaussianModule
+from models.gaussian_module_depth import GaussianModule
 from utils.data_utils import get_dataset
 from lightning.pytorch.loggers.wandb import WandbLogger
 import lightning as L

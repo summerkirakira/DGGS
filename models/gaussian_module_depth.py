@@ -131,7 +131,7 @@ class GaussianModule(L.LightningModule):
         if rendered_depth is not None and self.global_step < self.config.train.densify_until_iteration:
             rendered_depth = rendered_depth.unsqueeze(0)
             l_depth = self.depth_loss(camera, rendered_depth)
-            loss += l_depth
+            # loss += l_depth
             self.log(f"{self.dataset.name}_depth_loss", l_depth)
 
 
@@ -145,12 +145,11 @@ class GaussianModule(L.LightningModule):
         return tensor > threshold
 
     def depth_loss(self, camera: Camera, rendered_depth: Tensor):
-        depth_mask = camera.confidence_map > 0.95
+        depth_mask = camera.confidence_map > 0.9
 
 
         if self.global_step % 200 == 0:
             self.log_image(depth2image(rendered_depth), depth2image(camera.depth_map), name="Depth Comparison")
-
             new_confidence = camera.confidence_map.clone()
             new_confidence[depth_mask] = 0.0
 
