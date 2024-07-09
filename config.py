@@ -21,6 +21,9 @@ class BasicConfig(BaseModel):
         random_background: bool
         rotation_lr: float
         scaling_lr: float
+        use_depth_guide: bool
+        use_normal_guide: bool
+        depth_guide_until_iteration: int
 
     class Pipe(BaseModel):
         compute_cov3D_python: bool

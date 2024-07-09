@@ -130,20 +130,19 @@ class GaussianModule(L.LightningModule):
         rendered_depth = render_pkg.get("render_depth", None)
         rendered_normal = render_pkg.get("render_normal", None)
 
-        if rendered_depth is not None and self.global_step < 10000:
+        if self.global_step < self.config.train.depth_guide_until_iteration:
             rendered_depth = rendered_depth.unsqueeze(0)
             rendered_normal = rendered_normal.unsqueeze(0)
-            l_depth = self.depth_loss(camera, rendered_depth)
-            # loss += l_depth
-            self.log(f"{self.dataset.name}_depth_loss", l_depth)
 
+            if self.config.train.use_depth_guide:
+                l_depth = self.depth_loss(camera, rendered_depth)
+                loss += l_depth
+                self.log(f"{self.dataset.name}_depth_loss", l_depth)
 
-            l_normal = self.normal_loss(camera, rendered_normal)
-
-            self.log(f"{self.dataset.name}_normal_loss", l_normal)
-
-            loss += l_depth + l_normal
-
+            if self.config.train.use_normal_guide:
+                l_normal = self.normal_loss(camera, rendered_normal)
+                loss += l_normal
+                self.log(f"{self.dataset.name}_normal_loss", l_normal)
 
         if self.global_step % 500 == 0:
             self.log_image(image, gt_image, name=f"Rendered Image[{self.dataset.name}]")
@@ -156,7 +155,6 @@ class GaussianModule(L.LightningModule):
 
     def depth_loss(self, camera: Camera, rendered_depth: Tensor):
         depth_mask = camera.confidence_map > 0.85
-
 
         if self.global_step % 200 == 0:
             self.log_image(depth2image(rendered_depth), depth2image(camera.depth_map), name="Depth Comparison")
@@ -178,12 +176,6 @@ class GaussianModule(L.LightningModule):
 
         confidence = (camera.normal_confidence - camera.normal_confidence.min()) / (camera.normal_confidence.max() - camera.normal_confidence.min())
 
-        # visible_mask = confidence.cpu().numpy()
-        #
-        # visible_mask[visible_mask < 0.7] = 0.0
-        #
-        # Image.fromarray((visible_mask * 255).astype(np.uint8)).show()
-        #
         normal_mask = confidence > 0.8
 
         rendered_normal = rendered_normal.squeeze()
